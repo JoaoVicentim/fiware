@@ -7,13 +7,13 @@ from datetime import datetime
 import pytz
  
 # Constants for IP and port
-IP_ADDRESS = "46.17.108.113"
+IP_ADDRESS = "20.206.204.231"
 PORT_STH = 8666
 DASH_HOST = "0.0.0.0"  # Set this to "0.0.0.0" to allow access from any IP
  
 # Function to get luminosity data from the API
-def get_luminosity_data(lastN):
-    url = f"http://{IP_ADDRESS}:{PORT_STH}/STH/v1/contextEntities/type/Lamp/id/urn:ngsi-ld:Lamp:001/attributes/luminosity?lastN={lastN}"
+def get_data(attribute, lastN):
+    url = f"http://{IP_ADDRESS}:{PORT_STH}/STH/v1/contextEntities/type/Temp/id/urn:ngsi-ld:Temp:05x/attributes/{attribute}?lastN={lastN}"
     headers = {
         'fiware-service': 'smart',
         'fiware-servicepath': '/'
@@ -47,15 +47,14 @@ def convert_to_lisbon_time(timestamps):
     return converted_timestamps
  
 # Set lastN value
-lastN = 10  # Get 10 most recent points at each interval
+lastN = 20  # Get 10 most recent points at each interval
  
 app = dash.Dash(__name__)
  
 app.layout = html.Div([
-    html.H1('Luminosity Data Viewer'),
-    dcc.Graph(id='luminosity-graph'),
-    # Store to hold historical data
-    dcc.Store(id='luminosity-data-store', data={'timestamps': [], 'luminosity_values': []}),
+    html.H1('Sensor Data Viewer'),
+    dcc.Graph(id='temperature-graph'),
+    dcc.Store(id='sensor-data-store', data={'timestamps': [], 'temperature_values': []}),
     dcc.Interval(
         id='interval-component',
         interval=10*1000,  # in milliseconds (10 seconds)
@@ -64,69 +63,77 @@ app.layout = html.Div([
 ])
  
 @app.callback(
-    Output('luminosity-data-store', 'data'),
+    Output('sensor-data-store', 'data'),
     Input('interval-component', 'n_intervals'),
-    State('luminosity-data-store', 'data')
+    State('sensor-data-store', 'data')
 )
 def update_data_store(n, stored_data):
-    # Get luminosity data
-    data_luminosity = get_luminosity_data(lastN)
+        # Get Sensor Data
+    lastN = 20  #max register to show
+    data_temperature = get_data('temperature', lastN)
  
-    if data_luminosity:
-        # Extract values and timestamps
-        luminosity_values = [float(entry['attrValue']) for entry in data_luminosity]  # Ensure values are floats
+    if data_temperature and data_humidity and data_luminosity:
+        temperature_values = [float(entry['attrValue']) for entry in data_temperature]
+        humidity_values = [float(entry['attrValue']) for entry in data_humidity]
+        luminosity_values = [float(entry['attrValue']) for entry in data_luminosity]
         timestamps = [entry['recvTime'] for entry in data_luminosity]
- 
-        # Convert timestamps to Lisbon time
+
         timestamps = convert_to_lisbon_time(timestamps)
- 
-        # Append new data to stored data
-        stored_data['timestamps'].extend(timestamps)
-        stored_data['luminosity_values'].extend(luminosity_values)
+
+        # Substituir os dados antigos por novos até lastN
+        stored_data['timestamps'] = timestamps[-lastN:]
+        stored_data['temperature_values'] = temperature_values[-lastN:]
  
         return stored_data
  
     return stored_data
- 
-@app.callback(
-    Output('luminosity-graph', 'figure'),
-    Input('luminosity-data-store', 'data')
-)
-def update_graph(stored_data):
-    if stored_data['timestamps'] and stored_data['luminosity_values']:
-        # Calculate mean luminosity
-        mean_luminosity = sum(stored_data['luminosity_values']) / len(stored_data['luminosity_values'])
- 
-        # Create traces for the plot
-        trace_luminosity = go.Scatter(
-            x=stored_data['timestamps'],
-            y=stored_data['luminosity_values'],
-            mode='lines+markers',
-            name='Luminosity',
-            line=dict(color='orange')
-        )
-        trace_mean = go.Scatter(
-            x=[stored_data['timestamps'][0], stored_data['timestamps'][-1]],
-            y=[mean_luminosity, mean_luminosity],
+def create_graph(trace_values, trace_name, color, y_title, y_min=None, y_max=None):
+    fig = go.Figure(data=[go.Scatter(
+        x=trace_values['timestamps'],
+        y=trace_values[trace_name],
+        mode='lines+markers',
+        name=trace_name,
+        line=dict(color=color)
+    )])
+
+    # Adiciona traços de limite com legendas
+    if y_min is not None:
+        fig.add_trace(go.Scatter(
+            x=trace_values['timestamps'],
+            y=[y_min] * len(trace_values['timestamps']),
             mode='lines',
-            name='Mean Luminosity',
-            line=dict(color='blue', dash='dash')
-        )
- 
-        # Create figure
-        fig_luminosity = go.Figure(data=[trace_luminosity, trace_mean])
- 
-        # Update layout
-        fig_luminosity.update_layout(
-            title='Luminosity Over Time',
-            xaxis_title='Timestamp',
-            yaxis_title='Luminosity',
-            hovermode='closest'
-        )
- 
-        return fig_luminosity
- 
-    return {}
- 
+            line=dict(color='black', dash='dash'),
+            name=f'{y_title} Min'
+        ))
+
+    if y_max is not None:
+        fig.add_trace(go.Scatter(
+            x=trace_values['timestamps'],
+            y=[y_max] * len(trace_values['timestamps']),
+            mode='lines',
+            line=dict(color='black', dash='dash'),
+            name=f'{y_title} Max'
+        ))
+
+    fig.update_layout(
+        title=f'{trace_name.capitalize()} Over Time',
+        xaxis_title='Timestamp',
+        yaxis_title=y_title,
+        hovermode='closest'
+    )
+
+    return fig
+
+
+@app.callback(
+    Output('temperature-graph', 'figure'),
+    Input('sensor-data-store', 'data')
+)
+def update_graphs(stored_data):
+    fig_temperature = create_graph(
+        stored_data, 'temperature_values', 'red', 'Temperature (°C)', y_min=12, y_max=25
+    )
+    return fig_temperature
+
 if __name__ == '__main__':
     app.run_server(debug=True, host=DASH_HOST, port=8050)
